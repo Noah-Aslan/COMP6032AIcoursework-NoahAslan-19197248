@@ -235,3 +235,6 @@ strt47 = networld.streetDef((40,40), (49,49), 3, 7, biDirectional=True)
 streets = [strt0,strt1,strt2,strt3,strt4,strt5,strt6,strt7,strt8,strt9,strt10,strt11,strt12,strt13,strt14,strt15,
            strt16,strt17,strt18,strt19,strt20,strt21,strt22,strt23,strt24,strt25,strt26,strt27,strt28,strt29,strt30,strt31,
            strt32,strt33,strt34,strt35,strt36,strt37,strt38,strt39,strt40,strt41,strt42,strt43,strt44,strt45,strt46,strt47]
+runTime = 1440    # one day = 1440 minutes
+numDays = 10      # try 10–20 for better averages
+trafficOn = False # baseline without traffic
