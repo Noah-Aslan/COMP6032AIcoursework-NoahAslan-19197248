@@ -161,7 +161,16 @@ fareRect = pygame.Rect(round(3*meshSize[0]/8),
 for run in range(numDays):
 
    # create a dict of things we want to record
-   outputValues = {'time': [], 'fares': {}, 'taxis': {}}
+   outputValues = {
+    'time': [],
+    'fares': {},
+    'taxis': {},
+    # Part 1(a) series:
+    'active_taxis': [],
+    'dispatcher_revenue': [],
+    'sum_taxi_accounts': [],
+    'taxi_accounts': {}
+}
 
    outputLock = threading.Lock() # BUGFIX 21 October 2025 protect outputValues dict
 
@@ -288,6 +297,52 @@ for run in range(numDays):
                 curTime += 1
 
    roboUber.join() # wait 'til the simulation thread ends (BUGFIX 26 Nov 2024 ADR)
+   # >>> Part 1(a) CSV export
+   import csv, os
+
+   os.makedirs("results", exist_ok=True)
+
+   # A) Per-minute time series
+   with open(f"results/day_{run}_minute.csv", "w", newline="") as f:
+      w = csv.writer(f)
+      w.writerow(["t_min", "active_taxis", "dispatcher_revenue", "sum_taxi_accounts"])
+      # join by time; the three lists are [(t,val), ...]
+      at = dict(outputValues['active_taxis'])
+      dr = dict(outputValues['dispatcher_revenue'])
+      sa = dict(outputValues['sum_taxi_accounts'])
+      for t in sorted(at.keys()):
+         w.writerow([t, at.get(t, ""), dr.get(t, ""), sa.get(t, "")])
+
+   # B) Per-taxi end-of-day returns
+   with open(f"results/day_{run}_per_taxi.csv", "w", newline="") as f:
+      w = csv.writer(f)
+      w.writerow(["taxi_id", "taxi_return_day"])
+      # last recorded account for each taxi that day
+      for taxi_id, series in outputValues['taxi_accounts'].items():
+         last_t = max(series.keys()) if len(series) else None
+         last_val = series[last_t] if last_t is not None else 0
+         w.writerow([taxi_id, last_val])
+
+   # C) Day aggregates
+   last_time = max(dict(outputValues['dispatcher_revenue']).keys()) if outputValues['dispatcher_revenue'] else 0
+   dispatcher_return_day = dict(outputValues['dispatcher_revenue']).get(last_time, 0)
+   sum_taxi_day = dict(outputValues['sum_taxi_accounts']).get(last_time, 0)
+   joint_return_day = dispatcher_return_day + sum_taxi_day
+
+   # average taxi return (mean of per-taxi)
+   per_taxi_vals = []
+   for taxi_id, series in outputValues['taxi_accounts'].items():
+      if len(series):
+         per_taxi_vals.append(series[max(series.keys())])
+
+   avg_taxi_return = (sum(per_taxi_vals)/len(per_taxi_vals)) if per_taxi_vals else 0
+
+   with open(f"results/day_{run}_summary.csv", "w", newline="") as f:
+      w = csv.writer(f)
+      w.writerow(["day_id", "dispatcher_return_day", "joint_return_day", "avg_taxi_return_day"])
+      w.writerow([run, dispatcher_return_day, joint_return_day, avg_taxi_return])
+
+   # <<< Part 1(a) CSV export
    print("end of day: {0}".format(run))
 # reached the end of the loop. Next day (or exit)
 if fareFile is not None: # BUGFIX handle no open fare file to record ADR 21 October 2025

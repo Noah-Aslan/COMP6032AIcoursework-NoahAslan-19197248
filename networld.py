@@ -621,8 +621,13 @@ class NetWorld:
       # added locking mechanism to protect live output. *Should* be reliable now. (BUGFIX 21 October 2025 ADR)
       def runWorld(self,ticks=0,outputs=None,outlock=None):
           if outputs is None:
-             outputs = {}
-             outlock = threading.Lock()
+            outputs = {}
+            outlock = threading.Lock()
+            outputs.setdefault('active_taxis', [])
+            outputs.setdefault('dispatcher_revenue', [])
+            outputs.setdefault('sum_taxi_accounts', [])
+            outputs.setdefault('taxi_accounts', {})  # dict[taxi_id] -> {time: account}
+            # <<< Part 1(a)
           ticksRun = 0
           while (ticks == 0 or ticksRun < ticks) and (self.runTime == 0 or self._time < self.runTime):
                 print("Current time in the simulation world: {0}".format(self._time))
@@ -688,6 +693,24 @@ class NetWorld:
                 # traffic flows around them.
                 for node in self._trafficQ.items():
                     self._trafficQ[node[0]] -= self._net[node[0]].injectTraffic(self, node[1])
+               # >>> Part 1(a) logging: minute-level metrics
+                active = sum(1 for t, meta in self._taxis.items() if t.onDuty)
+                dispatcher_rev = self._dispatcher._revenue if self._dispatcher is not None else 0
+                sum_accounts = sum(t._account for t, meta in self._taxis.items())
+
+                outlock.acquire()
+                try:
+                   outputs['active_taxis'].append((self._time, active))
+                   outputs['dispatcher_revenue'].append((self._time, dispatcher_rev))
+                   outputs['sum_taxi_accounts'].append((self._time, sum_accounts))
+                   # per-taxi accounts (optional but useful for distribution plots)
+                   if 'taxi_accounts' in outputs:
+                      for t, meta in self._taxis.items():
+                            outputs['taxi_accounts'].setdefault(t.number, {})
+                            outputs['taxi_accounts'][t.number][self._time] = t._account
+                finally:
+                  outlock.release()
+               # <<< Part 1(a)
                 # update the batch stepper
                 self._time += 1
                 ticksRun +=1                
