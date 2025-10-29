@@ -333,38 +333,65 @@ class Taxi:
       # journey. Below is a naive depth-first search implementation. You should be able
       # to do much better than this!
       def _planPath(self, origin, destination, **args):
-          # the list of explored paths. Recursive invocations pass in explored as a parameter
-          if 'explored' not in args:
-             args['explored'] = {}
-          # add this origin to the explored list
-          # explored is a dict purely so we can hash its index for fast lookup, so its value doesn't matter
-          args['explored'][origin] = None 
-          # the actual path we are going to generate
-          path = [origin]
-          # take the next node in the frontier, and expand it depth-wise               
-          if origin in self._map:
-             # the frontier of unexplored paths (from this Node
-             frontier = [node for node in self._map[origin].keys() if node not in args['explored']]
-             # recurse down to the next node. This will automatically create a depth-first
-             # approach because the recursion won't bottom out until no more frontier nodes
-             # can be generated 
-             for nextNode in frontier:
-                 path = path + self._planPath(nextNode, destination, explored=args['explored'])
-                 # stop early as soon as the destination has been found by any route.
-                 if destination in path:
-                    # validate path
-                    if len(path) > 1:
-                       try:
-                           # use a generator expression to find any invalid nodes in the path
-                           badNode = next(pnode for pnode in path[1:] if pnode not in self._map[path[path.index(pnode)-1]].keys())
-                           raise IndexError("Invalid path: no route from ({0},{1}) to ({2},{3} in map".format(self._map[path.index(pnode)-1][0], self._map[path.index(pnode)-1][1], pnode[0], pnode[1]))
-                       except StopIteration:
-                           pass
-                    return path
-          # didn't reach the destination from any reachable node
-          # no need, therefore, to expand the path for the higher-level call, this is a dead end.
-          return [] 
-                
+        # --- Part 1(b): improved path planner (A* with Dijkstra fallback)
+        import heapq
+        from math import hypot
+
+        if start_node_id == goal_node_id:
+            return [start_node_id]
+
+        world = getattr(self, "_world", None) or getattr(self, "world", None)
+        if world is None:
+            raise RuntimeError("Taxi._planPath: cannot access world")
+
+        def get_xy(nid):
+            node = world.get_node(nid)
+            if hasattr(node, "x") and hasattr(node, "y"):
+                return (node.x, node.y)
+            if hasattr(node, "pos"):
+                return tuple(node.pos)
+            if hasattr(node, "coord"):
+                return tuple(node.coord)
+            return None
+
+        def neighbors(nid):
+            return world.get_neighbors(nid)
+
+        def heuristic(nid):
+            s = get_xy(nid)
+            g = get_xy(goal_node_id)
+            if not s or not g:
+                return 0.0
+            return hypot(s[0] - g[0], s[1] - g[1])
+
+        open_heap = [(0.0, start_node_id)]
+        g_cost = {start_node_id: 0.0}
+        parent = {start_node_id: None}
+        closed = set()
+        use_h = bool(get_xy(start_node_id) and get_xy(goal_node_id))
+
+        while open_heap:
+            f, u = heapq.heappop(open_heap)
+            if u in closed:
+                continue
+            if u == goal_node_id:
+                path = []
+                while u is not None:
+                    path.append(u)
+                    u = parent[u]
+                return list(reversed(path))
+            closed.add(u)
+
+            for v, base_cost in neighbors(u):
+                new_g = g_cost[u] + float(base_cost)
+                if v not in g_cost or new_g < g_cost[v]:
+                    g_cost[v] = new_g
+                    parent[v] = u
+                    fscore = new_g + (heuristic(v) if use_h else 0.0)
+                    heapq.heappush(open_heap, (fscore, v))
+
+        return [start_node_id]
+
       # TODO
       # this function decides whether to offer a bid for a fare. In general you can consider your current position, time,
       # financial state, the collection and dropoff points, the time the fare called - or indeed any other variable that
