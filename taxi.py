@@ -211,7 +211,7 @@ class Taxi:
                     faresToRemove.append(fare[0])
                  # not at collection point, so determine how to get there
                  else:
-                    self._path = self._planPath(self._loc.index, origin)
+                    self._path = self._planPath(self._loc.index, origin) or []
               # get rid of any unallocated fares that are too stale to be likely customers
               elif self._world.simTime-fare[0][0] > self._maxFareWait:
                    faresToRemove.append(fare[0])
@@ -332,65 +332,101 @@ class Taxi:
       # this function should build your route and fill the _path list for each new
       # journey. Below is a naive depth-first search implementation. You should be able
       # to do much better than this!
-      def _planPath(self, origin, destination, **args):
+      def _planPath(self, start_node_id, goal_node_id):
         # --- Part 1(b): improved path planner (A* with Dijkstra fallback)
-        import heapq
-        from math import hypot
+        def _planPath(self, start_node_id, goal_node_id):
+            import heapq
+            from math import hypot
 
-        if start_node_id == goal_node_id:
+            if start_node_id == goal_node_id:
+               return [start_node_id]
+
+            world = getattr(self, "_world", None) or getattr(self, "world", None)
+            if world is None:
+               raise RuntimeError("Taxi._planPath: cannot access world")
+
+            def node_from_id(nid):
+               if hasattr(world, "getNodeByIndex"):
+                     return world.getNodeByIndex(nid)
+               if hasattr(world, "_nodes"):
+                     return world._nodes[nid]
+               if hasattr(world, "nodes"):
+                     return world.nodes[nid]
+               return None
+
+            def get_xy(nid):
+               n = node_from_id(nid)
+               if n is None:
+                     return None
+               if hasattr(n, "x") and hasattr(n, "y"):
+                     return (n.x, n.y)
+               if hasattr(n, "_x") and hasattr(n, "_y"):
+                     return (n._x, n._y)
+               if hasattr(n, "pos"):
+                     p = n.pos
+                     return (p[0], p[1]) if isinstance(p, (list, tuple)) and len(p) >= 2 else None
+               if hasattr(n, "coord"):
+                     c = n.coord
+                     return (c[0], c[1]) if isinstance(c, (list, tuple)) and len(c) >= 2 else None
+               return None
+
+            def neighbors(nid):
+               u = node_from_id(nid)
+               if u is None:
+                     return []
+               if hasattr(world, "getNeighbours"):
+                     nbr_nodes = world.getNeighbours(u)
+               elif hasattr(u, "neighbours"):
+                     nbr_nodes = u.neighbours
+               elif hasattr(u, "_neighbours"):
+                     nbr_nodes = u._neighbours
+               else:
+                     nbr_nodes = []
+               out = []
+               for v in nbr_nodes:
+                     vid = getattr(v, "index", getattr(v, "id", None))
+                     if vid is None:
+                        continue
+                     if hasattr(world, "travelTime"):
+                        cost = float(world.travelTime(u, v))
+                     else:
+                        cost = 1.0
+                     out.append((vid, max(1e-6, cost)))
+               return out
+
+            def heuristic(nid):
+               s = get_xy(nid)
+               g = get_xy(goal_node_id)
+               if not s or not g:
+                     return 0.0
+               return hypot(s[0] - g[0], s[1] - g[1])
+
+            open_heap = [(0.0, start_node_id)]
+            g_cost = {start_node_id: 0.0}
+            parent = {start_node_id: None}
+            closed = set()
+            use_h = bool(get_xy(start_node_id) and get_xy(goal_node_id))
+
+            while open_heap:
+               f, u = heapq.heappop(open_heap)
+               if u in closed:
+                     continue
+               if u == goal_node_id:
+                     path = []
+                     while u is not None:
+                        path.append(u)
+                        u = parent[u]
+                     return list(reversed(path))
+               closed.add(u)
+               for v, base_cost in neighbors(u):
+                     new_g = g_cost[u] + float(base_cost)
+                     if v not in g_cost or new_g < g_cost[v]:
+                        g_cost[v] = new_g
+                        parent[v] = u
+                        fscore = new_g + (heuristic(v) if use_h else 0.0)
+                        heapq.heappush(open_heap, (fscore, v))
+
             return [start_node_id]
-
-        world = getattr(self, "_world", None) or getattr(self, "world", None)
-        if world is None:
-            raise RuntimeError("Taxi._planPath: cannot access world")
-
-        def get_xy(nid):
-            node = world.get_node(nid)
-            if hasattr(node, "x") and hasattr(node, "y"):
-                return (node.x, node.y)
-            if hasattr(node, "pos"):
-                return tuple(node.pos)
-            if hasattr(node, "coord"):
-                return tuple(node.coord)
-            return None
-
-        def neighbors(nid):
-            return world.get_neighbors(nid)
-
-        def heuristic(nid):
-            s = get_xy(nid)
-            g = get_xy(goal_node_id)
-            if not s or not g:
-                return 0.0
-            return hypot(s[0] - g[0], s[1] - g[1])
-
-        open_heap = [(0.0, start_node_id)]
-        g_cost = {start_node_id: 0.0}
-        parent = {start_node_id: None}
-        closed = set()
-        use_h = bool(get_xy(start_node_id) and get_xy(goal_node_id))
-
-        while open_heap:
-            f, u = heapq.heappop(open_heap)
-            if u in closed:
-                continue
-            if u == goal_node_id:
-                path = []
-                while u is not None:
-                    path.append(u)
-                    u = parent[u]
-                return list(reversed(path))
-            closed.add(u)
-
-            for v, base_cost in neighbors(u):
-                new_g = g_cost[u] + float(base_cost)
-                if v not in g_cost or new_g < g_cost[v]:
-                    g_cost[v] = new_g
-                    parent[v] = u
-                    fscore = new_g + (heuristic(v) if use_h else 0.0)
-                    heapq.heappush(open_heap, (fscore, v))
-
-        return [start_node_id]
 
       # TODO
       # this function decides whether to offer a bid for a fare. In general you can consider your current position, time,

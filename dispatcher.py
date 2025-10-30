@@ -192,12 +192,41 @@ class Dispatcher:
       '''
       # TODO - improve costing
       def _costFare(self, fare):
-          timeToDestination = self._parent.travelTime(self._parent.getNode(fare.origin[0],fare.origin[1]),
-                                                      self._parent.getNode(fare.destination[0],fare.destination[1]))
-          # if the world is gridlocked, a flat fare applies.
-          if timeToDestination < 0:
-             return 150
-          return (25+timeToDestination)/0.9
+         import math
+
+         origin = fare.origin
+         dest = fare.destination
+
+         o_node = self._parent.getNode(origin[0], origin[1])
+         d_node = self._parent.getNode(dest[0], dest[1])
+         if o_node is None or d_node is None:
+            return 10.0
+
+         dist = max(1.0, float(self._parent.travelTime(o_node, d_node)))  # minutes or distance units
+         base_rate = 0.25
+         base_fare = base_rate * dist
+
+         active = sum(1 for t in self._taxis if getattr(t, "onDuty", False))
+
+         # count total open fares in the nested fare board
+         demand = 0
+         for dest_map in self._fareBoard.values():
+            for times_map in dest_map.values():
+                  demand += len(times_map)
+
+         ratio = (demand + 1) / max(1, active)  # demand/supply
+         dynamic = 1.0 + min(0.5, 0.1 * math.log1p(ratio))
+
+         price = base_fare * dynamic
+         price = min(max(price, 8.0), 80.0)  # bounds
+
+         if not hasattr(self, "_pricing_state"):
+            self._pricing_state = {"count": 0, "total": 0.0, "avg": 0.0}
+         self._pricing_state["count"] += 1
+         self._pricing_state["total"] += price
+         self._pricing_state["avg"] = self._pricing_state["total"] / self._pricing_state["count"]
+
+         return round(price, 2)
 
       # TODO
       # this method decides which taxi to allocate to a given fare. The algorithm here is not a fair allocation
@@ -205,33 +234,45 @@ class Dispatcher:
       # action. You should be able to do better than this. After balancing allocations, try to optimise which
       # fares are allocated to which taxi (or indeed to any taxi at all!)
       def _allocateFare(self, origin, destination, time):
-           # a very simple approach here gives taxis at most 5 ticks to respond, which can
-           # surely be improved upon.
-          if self._parent.simTime-time > 5:
-             allocatedTaxi = -1
-             winnerNode = None
-             fareNode = self._parent.getNode(origin[0],origin[1])
-             # this does the allocation. There are a LOT of conditions to check, namely:
-             # 1) that the fare is asking for transport from a valid location;
-             # 2) that the bidding taxi is in the dispatcher's list of taxis
-             # 3) that the taxi's location is 'on-grid': somewhere in the dispatcher's map
-             # 4) that at least one valid taxi has actually bid on the fare
-             if fareNode is not None:
-                for taxiIdx in self._fareBoard[origin][destination][time].bidders:
-                    if len(self._taxis) > taxiIdx:
-                       bidderLoc = self._taxis[taxiIdx].currentLocation
-                       bidderNode = self._parent.getNode(bidderLoc[0],bidderLoc[1])
-                       if bidderNode is not None:
-                          # ultimately the naive algorithm chosen is which taxi is the closest. This is patently unfair for several
-                          # reasons, but does produce *a* winner.
-                          if winnerNode is None or self._parent.distance2Node(bidderNode,fareNode) < self._parent.distance2Node(winnerNode,fareNode):
-                             allocatedTaxi = taxiIdx
-                             winnerNode = bidderNode
-                          else:
-                             # and after all that, we still have to check that somebody won, because any of the other reasons to invalidate
-                             # the auction may have occurred.
-                             if allocatedTaxi >= 0:
-                                # but if so, allocate the taxi.
-                                self._fareBoard[origin][destination][time].taxi = allocatedTaxi     
-                                self._parent.allocateFare(origin,self._taxis[allocatedTaxi])
-     
+            from collections import defaultdict
+            if not hasattr(self, "_rev_by_taxi"):
+               self._rev_by_taxi = defaultdict(float)
+            if not hasattr(self, "_min_bids_to_allocate"):
+               self._min_bids_to_allocate = 2
+            if self._parent.simTime - time <= 5:
+               return
+            fare_entry = self._fareBoard.get(origin, {}).get(destination, {}).get(time, None)
+            if fare_entry is None:
+               return
+            fare_node = self._parent.getNode(origin[0], origin[1])
+            dest_node = self._parent.getNode(destination[0], destination[1])
+            if fare_node is None or dest_node is None:
+               return
+            bids = list(fare_entry.bidders) if hasattr(fare_entry, "bidders") else []
+            if len(bids) < self._min_bids_to_allocate:
+               return
+            price = self._costFare(fare_entry)
+            best_idx = -1
+            best_score = float("-inf")
+            for taxi_idx in bids:
+               if taxi_idx < 0 or taxi_idx >= len(self._taxis):
+                     continue
+               loc = self._taxis[taxi_idx].currentLocation
+               bidder_node = self._parent.getNode(loc[0], loc[1])
+               if bidder_node is None:
+                     continue
+               eta_pickup = self._parent.travelTime(bidder_node, fare_node)
+               trip_time = self._parent.travelTime(fare_node, dest_node)
+               if eta_pickup < 0 or trip_time < 0:
+                     continue
+               total_minutes = max(1.0, float(eta_pickup) + float(trip_time))
+               rpm = float(price) / total_minutes
+               fair_pen = 0.001 * self._rev_by_taxi.get(taxi_idx, 0.0)
+               score = rpm - fair_pen
+               if score > best_score:
+                     best_score = score
+                     best_idx = taxi_idx
+            if best_idx >= 0:
+               fare_entry.taxi = best_idx
+               self._parent.allocateFare(origin, self._taxis[best_idx])
+               self._rev_by_taxi[best_idx] = self._rev_by_taxi.get(best_idx, 0.0) + float(price) 
